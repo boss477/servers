@@ -124,6 +124,21 @@ test("every spelling of a non-default secret counts; GITHUB_TOKEN in any spellin
   ]);
 });
 
+test("secret context and GITHUB_TOKEN exemption are case-insensitive", () => {
+  const yaml = wf(
+    "jobs:",
+    "  mixed-case-secret:",
+    "    steps:",
+    "      - env:",
+    "          KEY: ${{ SECRETS.DEPLOY_TOKEN }}",
+    "  mixed-case-default:",
+    "    steps:",
+    "      - env:",
+    "          GH_TOKEN: ${{ Secrets['github_token'] }}",
+  );
+  assert.deepEqual([...credentialedJobs(yaml)], ["mixed-case-secret"]);
+});
+
 test("a secret in the workflow-level env reaches every job", () => {
   const yaml = wf(
     "env:",
@@ -383,6 +398,38 @@ test("the needs context serialized whole counts as reading its outputs", () => {
     "        run: publish",
   );
   assert.deepEqual([...credentialedJobs(one)].sort(), ["a", "publish"]);
+});
+
+test("needs context and job names are matched case-insensitively", () => {
+  const yaml = wf(
+    "jobs:",
+    "  detect:",
+    "    steps:",
+    "      - uses: actions/checkout@v7",
+    "  build:",
+    "    steps:",
+    "      - uses: actions/checkout@v7",
+    "  publish:",
+    "    needs: [DETECT, build]",
+    "    permissions:",
+    "      id-token: write",
+    "    strategy:",
+    "      matrix:",
+    "        package: ${{ fromJson(NEEDS.detect.outputs.expected) }}",
+    "    steps:",
+    "      - env:",
+    "          EXPECTED: ${{ fromJson(needs.BUILD.outputs.expected) }}",
+    "        run: publish",
+  );
+  assert.deepEqual([...credentialedJobs(yaml)].sort(), [
+    "build",
+    "detect",
+    "publish",
+  ]);
+  assert.deepEqual(unpinnedRefs(yaml), [
+    { job: "detect", uses: "actions/checkout@v7" },
+    { job: "build", uses: "actions/checkout@v7" },
+  ]);
 });
 
 test("reading only a needed job's result does not make it credentialed", () => {

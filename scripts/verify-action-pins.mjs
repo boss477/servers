@@ -85,7 +85,7 @@ const repoRoot = path.resolve(
 // other `secrets` reference, so every spelling of every other name, a dynamic
 // index included, still reads as a secret.
 const DEFAULT_TOKEN =
-  /\bsecrets\s*(?:\.\s*GITHUB_TOKEN\b|\[\s*(['"])GITHUB_TOKEN\1\s*\])/g;
+  /\bsecrets\s*(?:\.\s*GITHUB_TOKEN\b|\[\s*(['"])GITHUB_TOKEN\1\s*\])/gi;
 // Where the first expression in a string opens. Everything from there on is
 // searched, rather than each `${{ … }}` body: finding where an expression ENDS
 // needs a parser, since a quoted string inside one may itself contain `}}`
@@ -124,7 +124,7 @@ function handedSecret(job, inherited) {
     const open = text.indexOf(EXPRESSION_OPEN);
     return (
       open !== -1 &&
-      /\bsecrets\b/.test(text.slice(open).replace(DEFAULT_TOKEN, ""))
+      /\bsecrets\b/i.test(text.slice(open).replace(DEFAULT_TOKEN, ""))
     );
   });
 }
@@ -182,6 +182,11 @@ function parseWorkflow(yaml, file = "<workflow>") {
 export function credentialedJobs(yaml, file) {
   const workflow = parseWorkflow(yaml, file).toJS() ?? {};
   const jobs = Object.entries(workflow.jobs ?? {});
+  const jobNameByLower = new Map(
+    jobs.map(([name]) => [name.toLowerCase(), name]),
+  );
+  const resolveJobName = (name) =>
+    jobNameByLower.get(String(name).toLowerCase());
   const held = new Set();
   for (const [name, job] of jobs) {
     const permissions =
@@ -199,7 +204,7 @@ export function credentialedJobs(yaml, file) {
     const seen = new Set();
     const queue = [...needsOf(workflow.jobs[name])];
     while (queue.length > 0) {
-      const next = queue.pop();
+      const next = resolveJobName(queue.pop());
       if (seen.has(next) || !workflow.jobs[next]) continue;
       seen.add(next);
       queue.push(...needsOf(workflow.jobs[next]));
@@ -213,7 +218,7 @@ export function credentialedJobs(yaml, file) {
   // reference that names no job (bare `needs`, `needs.*`, a dynamic index)
   // counts every job the reader needs.
   const NEEDS_USE =
-    /\bneeds\b\s*(\.\s*([\w-]+|\*)|\[\s*(?:'([^']*)'|"([^"]*)"|[^\]]*)\s*\])?\s*(?:\.\s*(\w+)|\[\s*['"](\w+)['"]\s*\])?/g;
+    /\bneeds\b\s*(\.\s*([\w-]+|\*)|\[\s*(?:'([^']*)'|"([^"]*)"|[^\]]*)\s*\])?\s*(?:\.\s*(\w+)|\[\s*['"](\w+)['"]\s*\])?/gi;
   const outputsReadBy = (job) => {
     const read = new Set();
     for (const text of stringsIn(job)) {
@@ -222,10 +227,21 @@ export function credentialedJobs(yaml, file) {
       for (const m of text.slice(open).matchAll(NEEDS_USE)) {
         const named = m[2] ?? m[3] ?? m[4];
         const property = m[5] ?? m[6];
-        if (m[1] !== undefined && property === "result") continue;
+        if (
+          m[1] !== undefined &&
+          property !== undefined &&
+          property.toLowerCase() === "result"
+        )
+          continue;
         if (named === undefined || named === "*")
-          for (const n of needsOf(job)) read.add(n);
-        else read.add(named);
+          for (const n of needsOf(job)) {
+            const resolved = resolveJobName(n);
+            if (resolved !== undefined) read.add(resolved);
+          }
+        else {
+          const resolved = resolveJobName(named);
+          if (resolved !== undefined) read.add(resolved);
+        }
       }
     }
     return read;
